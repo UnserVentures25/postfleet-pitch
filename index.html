@@ -620,6 +620,7 @@ ul.ticks small{display:block;font-size:15px;color:var(--muted);margin-top:2px}
   <div class="foot">
     <button class="ctl" id="play" aria-label="Pause"><svg viewBox="0 0 14 14"><path id="playico" d="M3 2h3v10H3zM8 2h3v10H8z"/></svg></button>
     <button class="ctl" id="snd" aria-label="Ton einschalten"><svg viewBox="0 0 14 14"><path d="M1.5 5h2.2L7 2.2v9.6L3.7 9H1.5z"/><path id="sndico" d="M9 4.6l3.2 4.8M12.2 4.6L9 9.4" style="fill:none;stroke:var(--fg);stroke-width:1.4;stroke-linecap:round"/></svg></button>
+    <span id="sndhint" class="count" style="display:none;color:var(--fg)"></span>
     <div class="track" id="track"></div>
     <div class="count" id="count"></div>
   </div>
@@ -659,7 +660,7 @@ const fills = slides.map((_, i) => {
   const seg = document.createElement('i'), b = document.createElement('b');
   seg.append(b); seg.dataset.go = i; track.append(seg); return b;
 });
-let cur = -1, elapsed = 0, playing = !q.has('manuell') && !still, last = performance.now(), timers = [];
+let cur = -1, elapsed = 0, playing = !q.has('manuell') && !q.has('warten') && !still, last = performance.now(), timers = [];
 
 let quer = false;
 // Anteil 0–1 entlang der Leserichtung der Bühne (im Hochformat mit ?quer gedreht)
@@ -710,6 +711,7 @@ function go(n) {
 const music = new Audio('assets/musik.mp3');
 music.loop = true; music.volume = 0.35; music.preload = 'none';
 const sndico = document.getElementById('sndico'), snd = document.getElementById('snd');
+document.getElementById('sndhint').textContent = lang === 'en' ? 'Click for sound' : 'Klick für Ton';
 let soundOn = !q.has('manuell') && !q.has('stumm') && !still, blocked = false;
 // Erklärstimme: ein Clip je Szene, die Musik wird darunter leiser.
 const VKEYS = ['titel', 'problem', 'verbinden', 'marke', 'material', 'vorschlag', 'formate', 'posten', 'danach', 'teil', 'sicher', 'pakete', 'partner', 'schluss']
@@ -744,9 +746,11 @@ function drawSound() {
   const on = soundOn && !blocked;
   sndico.setAttribute('d', on ? 'M9.2 5a2.6 2.6 0 0 1 0 4M10.8 3.2a5 5 0 0 1 0 7.6' : 'M9 4.6l3.2 4.8M12.2 4.6L9 9.4');
   snd.setAttribute('aria-label', on ? L.mute : L.unmute);
+  document.getElementById('sndhint').style.display = soundOn && blocked ? '' : 'none';
 }
 // Browser lassen Ton erst nach einer Eingabe zu: beim ersten Klick oder Tastendruck nachholen.
-for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { if (blocked) { blocked = false; syncSound(); } });
+let justUnblocked = false;
+for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { if (blocked) { blocked = false; justUnblocked = ev === 'pointerdown'; syncSound(); } });
 document.addEventListener('visibilitychange', syncSound);
 
 function setPlaying(p) {
@@ -793,7 +797,17 @@ addEventListener('click', e => {
   const seg = e.target.closest('[data-go]');
   if (seg) return go(+seg.dataset.go);
   if (e.target.closest('a,button')) return;
+  // Der Klick, der nur den Ton freigibt, blättert nicht weiter.
+  if (justUnblocked) { justUnblocked = false; return; }
   go(cur + (along(e) < 0.3 ? -1 : 1));
+});
+// Eingebettet mit ?warten: die Seite drumherum startet und pausiert den Film (beim Scrollen).
+addEventListener('message', e => {
+  if (e.origin !== location.origin || !e.data || e.data.type !== 'postfleet-film') return;
+  if (e.data.cmd === 'play' && !playing && cur < slides.length - 1) setPlaying(true);
+  if (e.data.cmd === 'pause' && playing) setPlaying(false);
+  // Eine Eingabe auf der Seite drumherum gibt den Ton frei.
+  if (e.data.cmd === 'gesture' && blocked) { blocked = false; syncSound(); }
 });
 
 setPlaying(playing);
