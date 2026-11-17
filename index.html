@@ -619,6 +619,7 @@ ul.ticks small{display:block;font-size:15px;color:var(--muted);margin-top:2px}
 
   <div class="foot">
     <button class="ctl" id="play" aria-label="Pause"><svg viewBox="0 0 14 14"><path id="playico" d="M3 2h3v10H3zM8 2h3v10H8z"/></svg></button>
+    <button class="ctl" id="snd" aria-label="Ton einschalten"><svg viewBox="0 0 14 14"><path d="M1.5 5h2.2L7 2.2v9.6L3.7 9H1.5z"/><path id="sndico" d="M9 4.6l3.2 4.8M12.2 4.6L9 9.4" style="fill:none;stroke:var(--fg);stroke-width:1.4;stroke-linecap:round"/></svg></button>
     <div class="track" id="track"></div>
     <div class="count" id="count"></div>
   </div>
@@ -645,7 +646,9 @@ if (lang === 'en') {
     }
   });
 }
-const L = lang === 'en' ? { pause: 'Pause', play: 'Play' } : { pause: 'Pause', play: 'Abspielen' };
+const L = lang === 'en'
+  ? { pause: 'Pause', play: 'Play', mute: 'Mute', unmute: 'Unmute' }
+  : { pause: 'Pause', play: 'Abspielen', mute: 'Ton ausschalten', unmute: 'Ton einschalten' };
 
 const stage = document.getElementById('stage');
 const slides = [...document.querySelectorAll('.slide')];
@@ -701,16 +704,61 @@ function go(n) {
   history.replaceState(null, '', location.pathname + location.search + '#' + (n + 1));
   slides[n].querySelectorAll('[data-count]').forEach(countUp);
   slides[n].querySelectorAll('[data-type]').forEach(type);
+  startVoice();
 }
+// Dieselbe Musik wie die Demo auf der Startseite, gleiche Lautstärke.
+const music = new Audio('assets/musik.mp3');
+music.loop = true; music.volume = 0.35; music.preload = 'none';
+const sndico = document.getElementById('sndico'), snd = document.getElementById('snd');
+let soundOn = !q.has('manuell') && !q.has('stumm') && !still, blocked = false;
+// Erklärstimme: ein Clip je Szene, die Musik wird darunter leiser.
+const VKEYS = ['titel', 'problem', 'verbinden', 'marke', 'material', 'vorschlag', 'formate', 'posten', 'danach', 'teil', 'sicher', 'pakete', 'partner', 'schluss']
+  .filter(k => k !== 'partner' || q.has('partner'));
+const VDUR = /*VDUR*/{"de":{"titel":5.28,"problem":7.12,"verbinden":7.4,"marke":7.92,"material":7.56,"vorschlag":6.0,"formate":6.72,"posten":7.23,"danach":6.24,"teil":5.26,"sicher":7.96,"pakete":5.32,"partner":5.84,"schluss":4.32},"en":{"titel":5.2,"problem":6.24,"verbinden":5.88,"marke":6.8,"material":6.72,"vorschlag":6.36,"formate":5.96,"posten":7.32,"danach":5.8,"teil":4.52,"sicher":6.96,"pakete":4.88,"partner":5.0,"schluss":4.16}}/*VDUR*/;
+const voiceOn = !q.has('ohnestimme');
+const voice = new Audio(); voice.preload = 'none';
+let voiceTimer = 0, voiceDone = true;
+const duck = () => { music.volume = !voice.paused && !voiceDone ? 0.12 : 0.35; };
+voice.addEventListener('ended', () => { voiceDone = true; duck(); });
+function startVoice() {
+  clearTimeout(voiceTimer); voice.pause(); voiceDone = true; duck();
+  if (!voiceOn || cur < 0) return;
+  voice.src = `assets/voice/${lang}/${VKEYS[cur]}.mp3`;
+  voiceDone = false;
+  voiceTimer = setTimeout(syncSound, 600);
+}
+function sceneMs() {
+  const base = (+slides[cur].dataset.t || 8) * 1000;
+  const v = voiceOn && soundOn && !blocked ? ((VDUR[lang] || {})[VKEYS[cur]] || 0) * 1000 + 2000 : 0;
+  return Math.max(base, v);
+}
+function syncSound() {
+  if (soundOn && playing && !document.hidden) {
+    music.play().then(() => { blocked = false; drawSound(); }, () => { blocked = true; drawSound(); });
+    if (voiceOn && !voiceDone && voice.src) voice.play().then(duck, () => {});
+  } else { music.pause(); voice.pause(); }
+  duck();
+  drawSound();
+}
+function drawSound() {
+  const on = soundOn && !blocked;
+  sndico.setAttribute('d', on ? 'M9.2 5a2.6 2.6 0 0 1 0 4M10.8 3.2a5 5 0 0 1 0 7.6' : 'M9 4.6l3.2 4.8M12.2 4.6L9 9.4');
+  snd.setAttribute('aria-label', on ? L.mute : L.unmute);
+}
+// Browser lassen Ton erst nach einer Eingabe zu: beim ersten Klick oder Tastendruck nachholen.
+for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { if (blocked) { blocked = false; syncSound(); } });
+document.addEventListener('visibilitychange', syncSound);
+
 function setPlaying(p) {
   playing = p; last = performance.now();
   playico.setAttribute('d', p ? 'M3 2h3v10H3zM8 2h3v10H8z' : 'M3 1.5l9 5.5-9 5.5z');
   document.getElementById('play').setAttribute('aria-label', p ? L.pause : L.play);
+  syncSound();
 }
 function frame(t) {
   const dt = Math.min(100, t - last); last = t;
   if (playing && !document.hidden) {
-    const dur = (+slides[cur].dataset.t || 8) * 1000;
+    const dur = sceneMs();
     elapsed += dt;
     fills[cur].style.width = Math.min(100, elapsed / dur * 100) + '%';
     if (elapsed >= dur) {
@@ -740,7 +788,8 @@ addEventListener('touchend', e => {
 addEventListener('click', e => {
   if (swiped) return;
   if (e.target.closest('#play')) return setPlaying(!playing);
-  if (e.target.closest('#again')) { go(0); return setPlaying(true); }
+  if (e.target.closest('#snd')) { soundOn = !(soundOn && !blocked); blocked = false; return syncSound(); }
+  if (e.target.closest('#again')) { music.currentTime = 0; go(0); return setPlaying(true); }
   const seg = e.target.closest('[data-go]');
   if (seg) return go(+seg.dataset.go);
   if (e.target.closest('a,button')) return;
